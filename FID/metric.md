@@ -20,3 +20,5 @@ Run as below in the same dir of the `cacl_fid.py`
 python cacl_fid.py --fake_path <fake filelist> --real_path <real filelist> --metric [kid/fid/skvd]
 ```
 
+The option choice is the **num_crops** and **subset_size**. You can refer to the code.
+

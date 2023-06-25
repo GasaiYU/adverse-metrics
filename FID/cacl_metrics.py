@@ -13,6 +13,9 @@ from torchmetrics.image.kid import KernelInceptionDistance
 
 from torchvision import models
 
+import tqdm
+from sklearn.metrics.pairwise import polynomial_kernel
+
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 def get_image_list(path, subset_size):
@@ -99,7 +102,7 @@ def find_knn(fake_crop_labels, real_crop_labels, threhold=0.5):
         values, indices = torch.sort(torch.tensor(similarities), descending=True)
         similarities = []
         if values[0] > threhold:
-            res.append((i, indices[0]))
+            res.append((i, int(indices[0])))
     return res
 
 
@@ -112,7 +115,7 @@ def get_vgg_features(crop_image, vgg):
     """
     activation = []
     def hook(model, input, output):
-        activation.append(output)
+        activation.append(output.cpu().numpy())
     
     vgg.features[3].register_forward_hook(hook=hook)
     vgg.features[8].register_forward_hook(hook=hook)
@@ -120,8 +123,23 @@ def get_vgg_features(crop_image, vgg):
     vgg.features[22].register_forward_hook(hook=hook)
     vgg.features[29].register_forward_hook(hook=hook)
     
-    res = vgg(crop_image)
+    with torch.no_grad():
+        res = vgg(crop_image)
+
     return activation
+
+def MMD(X, Y, kernel="polynominal"):
+		# print(X.shape, Y.shape)
+		assert X.shape[0] == Y.shape[0] and X.shape[1] == Y.shape[1]
+		n = X.shape[0]
+		if kernel == "polynominal":
+			XY = polynomial_kernel(X, Y)
+			XX = polynomial_kernel(X, X)
+			YY = polynomial_kernel(Y, Y)
+		else:
+			raise NotImplementedError
+		
+		return XX.mean() + YY.mean() - 2 * XY.mean()
     
 def calculate_fid(fake_path, real_path, subset_size=50):
     """
@@ -142,6 +160,7 @@ def calculate_fid(fake_path, real_path, subset_size=50):
     
     print(f'fid_score: {fid}')
     return fid
+
 
 
 def calculate_kid(fake_path, real_path, subset_size=50):
@@ -165,7 +184,7 @@ def calculate_kid(fake_path, real_path, subset_size=50):
     return kid_mean, kid_std
 
 
-def calculate_skvd(fake_path, real_path, subset_size=50):
+def calculate_skvd(fake_path, real_path, subset_size=50, num_crops=3):
     """
     Calculate the sKVD between src and tgt distribution
     More info about sKVD metrics: https://arxiv.org/abs/2105.04619
@@ -175,40 +194,75 @@ def calculate_skvd(fake_path, real_path, subset_size=50):
     """
     fake_image_list, fake_label_list = get_image_label_list(fake_path, subset_size)
     real_image_list, real_label_list = get_image_label_list(real_path, subset_size)
-    fake_crop_index, fake_crop_labels, h_w_list = crop_label_list(fake_label_list)
-    real_crop_index, real_crop_labels, _ = crop_label_list(real_label_list, h_w_list)
+    fake_crop_index, fake_crop_labels, h_w_list = crop_label_list(fake_label_list, num_crops=num_crops)
+    real_crop_index, real_crop_labels, _ = crop_label_list(real_label_list, h_w_list, num_crops=num_crops)
     
     select_indices = find_knn(fake_crop_labels, real_crop_labels, threhold=0.5)
 
     vgg = models.vgg16(pretrained=True).to(device)
-    
-    fake_vgg_features = []
-    real_vgg_features = []
+
+    fake_skvd_1_2_features = []
+    fake_skvd_2_2_features = []
+    fake_skvd_3_3_features = []
+    fake_skvd_4_3_features = []
+    fake_skvd_5_3_features = []
+
+    real_skvd_1_2_features = []
+    real_skvd_2_2_features = []
+    real_skvd_3_3_features = []
+    real_skvd_4_3_features = []
+    real_skvd_5_3_features = []
     
     for indice in select_indices:
         i, j = indice
+        print(i, j)
         h1_start, h1_end, w1_start, w1_end = fake_crop_index[i]
         h2_start, h2_end, w2_start, w2_end = real_crop_index[j]
 
-        fake_crop_image = torch.tensor(fake_image_list[i][:, h1_start:h1_end, w1_start:w1_end], dtype=torch.float32).unsqueeze(0).to(device)
-        real_crop_image = torch.tensor(real_image_list[j][:, h2_start:h2_end, w2_start:w2_end], dtype=torch.float32).unsqueeze(0).to(device)
-        
-        fake_vgg_features.append(get_vgg_features(fake_crop_image, vgg))
-        real_vgg_features.append(get_vgg_features(real_crop_image, vgg))
+        fake_crop_image = torch.tensor(fake_image_list[i//num_crops][:, h1_start:h1_end, w1_start:w1_end], dtype=torch.float32).unsqueeze(0).to(device)
+        real_crop_image = torch.tensor(real_image_list[j//num_crops][:, h2_start:h2_end, w2_start:w2_end], dtype=torch.float32).unsqueeze(0).to(device)
+        a = get_vgg_features(fake_crop_image, vgg)
+        b = get_vgg_features(real_crop_image, vgg)
+
+        fake_skvd_1_2_features.append(a[0])
+        fake_skvd_2_2_features.append(a[1])
+        fake_skvd_3_3_features.append(a[2])
+        fake_skvd_4_3_features.append(a[3])
+        fake_skvd_5_3_features.append(a[4])
+
+        real_skvd_1_2_features.append(b[0])
+        real_skvd_2_2_features.append(b[1])
+        real_skvd_3_3_features.append(b[2])
+        real_skvd_4_3_features.append(b[3])
+        real_skvd_5_3_features.append(b[4])
     
-    breakpoint()
-    mmd_skvd_subset_size = len(fake_vgg_features)
     skvd_names = ['skvd_1_2', 'skvd_2_2', 'skvd_3_3', 'skvd_4_3', 'skvd_5_3']
-    
-    
-    pass
+    fake_skvd_names = [fake_skvd_1_2_features, fake_skvd_2_2_features, fake_skvd_3_3_features,
+                       fake_skvd_4_3_features, fake_skvd_5_3_features]
+    real_skvd_names = [real_skvd_1_2_features, real_skvd_2_2_features, real_skvd_3_3_features,
+                       real_skvd_4_3_features, real_skvd_5_3_features]
 
+    skvd_res = {}
 
+    for i in range(5):
+        fake_feature = np.concatenate(fake_skvd_names[i][:subset_size], axis=0)
+        real_feature = np.concatenate(real_skvd_names[i][:subset_size], axis=0)
+        fake_feature = np.reshape(fake_feature, [subset_size, -1]) / 255.0
+        real_feature = np.reshape(real_feature, [subset_size, -1]) / 255.0
+
+        skvd_res[skvd_names[i]] = MMD(fake_feature, real_feature) * 1000
+        print(f'[SKVD] {skvd_names[i]} skvd_mean: {skvd_res[skvd_names[i]]}')
+    
+    return skvd_res
+    
 if __name__ == '__main__':
     p = argparse.ArgumentParser('Calculate the FID metrics between the synthetic and real images.')
     p.add_argument('--fake_path', type=str, help='path to the synthetic images filelist')
     p.add_argument('--real_path', type=str, help='path to the real images filelist')
     p.add_argument('--metric', type=str, choices=['fid', 'kid', 'skvd'], help='The metrics want to calculate')
+    p.add_argument('--num_crops', type=int, help='The number of crops per image.', default=3)
+    p.add_argument('--subset_size', type=int, help='The number of images used to calculate skvd', default=50)
+
     args = p.parse_args()
     if args.metric == 'fid':
         calculate_fid(args.fake_path, args.real_path)
