@@ -72,6 +72,7 @@ if __name__ == '__main__':
 
     metrics = StreamSegMetrics(args.num_classes)
     metrics.reset()
+    
     with open(args.label_path, 'r') as f:
         for line in f.readlines():
             line = line.replace('\n', '')
