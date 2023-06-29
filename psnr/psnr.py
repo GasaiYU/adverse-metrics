@@ -3,6 +3,8 @@ import numpy as np
 from torchmetrics import StructuralSimilarityIndexMeasure, PeakSignalNoiseRatio
 from PIL import Image
 
+import tqdm
+
 import argparse
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -12,21 +14,25 @@ def cacl_psnr(real_filelist, fake_filelist, subset_size=20):
     with open(real_filelist, 'r') as f:
         for line in f.readlines():
             line = line.replace('\n', '')
-            real_image = torch.from_numpy(np.array(Image.open(line))).permute(2,0,1).float() / 255.0
+            real_image = torch.from_numpy(np.asarray(Image.open(line))).permute(2,0,1) / 255.0
             real_images.append(real_image)
-    real_images = torch.stack(real_images[:subset_size], dim=0).to(device)
 
     with open(fake_filelist, 'r') as f:
         for line in f.readlines():
             line = line.replace('\n', '')
-            fake_image = torch.from_numpy(np.array(Image.open(line))).permute(2,0,1).float() / 255.0
+            fake_image = torch.from_numpy(np.asarray(Image.open(line))).permute(2,0,1) / 255.0
             fake_images.append(fake_image)
-    fake_images = torch.stack(fake_images[:subset_size], dim=0).to(device)
 
     psnr = PeakSignalNoiseRatio(data_range=1.0).to(device)
-    psnr_value = psnr(fake_images, real_images)
+    total_iter = len(real_images) // subset_size
 
-    return psnr_value
+    psnr_value = 0
+    for i in tqdm.trange(total_iter):
+        psnr_fake_images = torch.stack(fake_images[subset_size*i: subset_size*(i+1)], dim=0)
+        psnr_real_images = torch.stack(real_images[subset_size*i: subset_size*(i+1)], dim=0)
+        psnr_value += psnr(psnr_fake_images, psnr_real_images)
+
+    return psnr_value / total_iter
 
 if __name__ == '__main__':
     p = argparse.ArgumentParser('Calculate the psnr metric between the generated images and real images')
