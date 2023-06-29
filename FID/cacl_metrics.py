@@ -18,6 +18,8 @@ from sklearn.metrics.pairwise import polynomial_kernel
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
+TOTAL = 1000
+
 def get_image_list(path, subset_size):
     """
     Get the tensor image list from the filelist.
@@ -141,29 +143,32 @@ def MMD(X, Y, kernel="polynominal"):
 		
 		return XX.mean() + YY.mean() - 2 * XY.mean()
     
-def calculate_fid(fake_path, real_path, subset_size=50):
+def calculate_fid(fake_path, real_path, subset_size=20):
     """
     Calculate the FrechetInceptionDistance (FID) between src and tgt distribution
     
     fake_path: Path to the synthetic images filelist 
     real_path: Path to the real images filelist
     """
-    fake_list = get_image_list(fake_path, subset_size)
-    real_list = get_image_list(real_path, subset_size)
-    fake = torch.tensor(np.stack(fake_list, axis=0))
-    real = torch.tensor(np.stack(real_list, axis=0))
+    fake_list = get_image_list(fake_path, subset_size=TOTAL)
+    real_list = get_image_list(real_path, subset_size=TOTAL)
+    fid = FrechetInceptionDistance(feature=2048)
 
-    fid = FrechetInceptionDistance(feature=64)
-    fid.update(real, real=True)
-    fid.update(fake, real=False)
-    fid = fid.compute()
+    num_iter = len(fake_list) // subset_size
+    fid_score = 0
+    for i in tqdm.trange(num_iter):
+        fake = torch.tensor(np.stack(fake_list[subset_size*i: subset_size*(i+1)], axis=0))
+        real = torch.tensor(np.stack(real_list[subset_size*i: subset_size*(i+1)], axis=0))
+        fid.update(real, real=True)
+        fid.update(fake, real=False)
+        fid_score += fid.compute()
     
-    print(f'fid_score: {fid}')
-    return fid
+    print(f'fid_score: {fid_score / num_iter}')
+    return fid_score / num_iter
 
 
 
-def calculate_kid(fake_path, real_path, subset_size=50):
+def calculate_kid(fake_path, real_path, subset_size=20):
     """
     Calculate the KernelInceptionDistance (KID) between src and tgt distribution
     
@@ -173,15 +178,21 @@ def calculate_kid(fake_path, real_path, subset_size=50):
     """
     fake_list = get_image_list(fake_path, subset_size)
     real_list = get_image_list(real_path, subset_size)
-    fake = torch.tensor(np.stack(fake_list, axis=0))
-    real = torch.tensor(np.stack(real_list, axis=0))
     
     kid = KernelInceptionDistance(subset_size=subset_size)
-    kid.update(fake, real=False)
-    kid.update(real, real=True)
-    kid_mean, kid_std = kid.compute()
-    print(f'kid_mean ± kid_std: {kid_mean:.6f}±{kid_std:.6f}')
-    return kid_mean, kid_std
+    num_iter = len(fake_list) // subset_size
+
+    total_kid_mean, total_kid_std = 0, 0
+    for i in tqdm.trange(num_iter):
+        fake = torch.tensor(np.stack(fake_list[subset_size*i: subset_size*(i+1)], axis=0))
+        real = torch.tensor(np.stack(real_list[subset_size*i: subset_size*(i+1)], axis=0))
+        kid.update(fake, real=False)
+        kid.update(real, real=True)
+        kid_mean, kid_std = kid.compute()
+        total_kid_mean += kid_mean
+        total_kid_std += kid_std
+    print(f'kid_mean ± kid_std: {total_kid_mean/num_iter:.6f}±{total_kid_std/num_iter:.6f}')
+    return total_kid_mean / num_iter, total_kid_std / num_iter
 
 
 def calculate_skvd(fake_path, real_path, subset_size=50, num_crops=3):
